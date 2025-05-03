@@ -49,7 +49,7 @@ def demo_file_validation():
     
     with open(filename, 'rb') as f:
         files = {'file': f}
-        data = {'file_type': 'sales_data'}
+        data = {'file_type': 'sales_data', 'job_name': 'nightly_import'}
         response = requests.post(f"{API_BASE}/api/validate", files=files, data=data)
     
     print_json(response.json())
@@ -64,7 +64,7 @@ def demo_file_validation():
     
     with open(filename, 'rb') as f:
         files = {'file': f}
-        data = {'file_type': 'sales_data'}
+        data = {'file_type': 'sales_data', 'job_name': 'nightly_import'}
         response = requests.post(f"{API_BASE}/api/validate", files=files, data=data)
     
     print_json(response.json())
@@ -166,6 +166,54 @@ def demo_stats():
     response = requests.get(f"{API_BASE}/api/mcp-stats")
     print_json(response.json())
 
+def demo_contextual_messaging():
+    """Demostración de personalización contextual de mensajes según audiencia."""
+    print_header("DEMOSTRACIÓN DE PERSONALIZACIÓN CONTEXTUAL")
+    
+    # Mensaje y error de ejemplo
+    sample_message = "Error de conexión a la base de datos. No se pudo establecer la conexión con el servidor MySQL."
+    sample_error = {
+        "type": "connection_error",
+        "message": "Error de conexión a la base de datos. No se pudo establecer la conexión con el servidor MySQL.",
+        "log": "Error: Could not connect to database at 10.0.1.5:3306. Connection timed out after 30 seconds."
+    }
+    
+    job_name = "nightly_import"
+    
+    # Demostrar personalización para diferentes audiencias
+    audience_types = ["engineer", "support", "business", "client"]
+    
+    print("Personalización de mensaje simple:\n")
+    for audience in audience_types:
+        print(f"\n--- Mensaje para {audience.upper()} ---")
+        data = {
+            "message": sample_message,
+            "job": job_name,
+            "audience_type": audience
+        }
+        response = requests.post(f"{API_BASE}/api/contextualized-message", json=data)
+        result = response.json()
+        print(result['contextualized_message'])
+    
+    print("\n\nPersonalización de respuesta completa con error:\n")
+    for audience in audience_types:
+        print(f"\n--- Respuesta completa para {audience.upper()} ---")
+        data = {
+            "message": sample_message,
+            "job": job_name,
+            "audience_type": audience,
+            "error_data": sample_error
+        }
+        response = requests.post(f"{API_BASE}/api/contextualized-message", json=data)
+        result = response.json()
+        full_response = result['full_response']
+        
+        print(f"Título: {full_response['title']}")
+        print(f"Mensaje: {full_response['message']}")
+        print("Pasos a seguir:")
+        for step in full_response['next_steps']:
+            print(f"- {step}")
+
 def main():
     """Ejecuta todas las demostraciones."""
     print_header("ERROR BUSTERS - DEMOSTRACIÓN DEL SISTEMA")
@@ -197,6 +245,9 @@ def main():
     time.sleep(1)
     
     demo_stats()
+    time.sleep(1)
+    
+    demo_contextual_messaging()
     
     print_header("DEMOSTRACIÓN COMPLETA")
     print("""
@@ -208,6 +259,11 @@ principales:
 3. Re-ejecución automática de jobs fallidos
 4. Integración con sistemas de tickets (Zendesk)
 5. Monitoreo continuo a través del Servidor MCP
+6. Personalización contextual de mensajes según:
+   - Entorno (desarrollo, pruebas, producción)
+   - Audiencia (técnico, soporte, negocio, cliente)
+   - Historial de errores y su frecuencia
+   - Criticidad del job y su impacto en el negocio
 
 El sistema continuará aprendiendo de cada nuevo error, mejorando sus diagnósticos
 y recomendaciones con el tiempo.

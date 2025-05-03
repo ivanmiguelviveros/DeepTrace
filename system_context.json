@@ -1,0 +1,55 @@
+{
+  "systems": {
+    "sales": {
+      "name": "Sistema de Ventas",
+      "environment": "production",
+      "criticality": "high",
+      "technical_contact": "equipo_tecnico@empresa.com",
+      "business_contact": "gerente_ventas@empresa.com"
+    },
+    "inventory": {
+      "name": "Sistema de Inventario",
+      "environment": "production",
+      "criticality": "medium",
+      "technical_contact": "equipo_tecnico@empresa.com",
+      "business_contact": "gerente_inventario@empresa.com"
+    },
+    "reporting": {
+      "name": "Sistema de Reportes",
+      "environment": "production",
+      "criticality": "medium",
+      "technical_contact": "equipo_tecnico@empresa.com",
+      "business_contact": "gerente_analisis@empresa.com"
+    }
+  },
+  "jobs": {
+    "nightly_import": {
+      "system": "sales",
+      "criticality": "high",
+      "schedule": "daily",
+      "dependencies": ["database", "file_storage"],
+      "business_impact": "Actualización de datos de ventas para reportes diarios. Si falla, los ejecutivos no tendrán información actualizada para tomar decisiones."
+    },
+    "customer_import": {
+      "system": "sales",
+      "criticality": "medium",
+      "schedule": "daily",
+      "dependencies": ["file_storage"],
+      "business_impact": "Actualización de datos de clientes. Si falla, algunas vistas de cliente mostrarán información desactualizada."
+    },
+    "inventory_sync": {
+      "system": "inventory",
+      "criticality": "high",
+      "schedule": "hourly",
+      "dependencies": ["database", "erp_connection"],
+      "business_impact": "Sincronización de niveles de inventario con tiendas. Si falla, podría resultar en ventas de productos sin stock."
+    },
+    "monthly_report": {
+      "system": "reporting",
+      "criticality": "critical",
+      "schedule": "monthly",
+      "dependencies": ["database", "file_storage", "report_engine"],
+      "business_impact": "Generación de informes financieros mensuales. Si falla, podría impactar el cierre financiero del mes."
+    }
+  }
+} 

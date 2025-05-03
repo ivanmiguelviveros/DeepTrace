@@ -10,6 +10,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from dotenv import load_dotenv
 from mcp_server import init_mcp_server, add_error_to_mcp, analyze_log_with_mcp, get_mcp_stats
+from context_analyzer import get_context_analyzer, AudienceType
 
 # Load environment variables
 load_dotenv()
@@ -18,6 +19,9 @@ app = Flask(__name__)
 
 # Initialize MCP server
 mcp_server = init_mcp_server()
+
+# Initialize context analyzer
+context_analyzer = get_context_analyzer()
 
 # Database of known errors and solutions (would be stored in a real DB/Elasticsearch)
 ERROR_DB = []
@@ -106,7 +110,8 @@ def index():
             '/api/analyze-log - Analyze a log for error patterns',
             '/api/zendesk-hook - Webhook for Zendesk tickets',
             '/api/stats - Get system statistics',
-            '/api/mcp-stats - Get MCP server statistics'
+            '/api/mcp-stats - Get MCP server statistics',
+            '/api/contextualized-message - Get a contextualized message for different audiences'
         ]
     })
 
@@ -138,6 +143,10 @@ def validate_file():
         
         # Add to MCP server
         add_error_to_mcp(error_entry)
+        
+        # Add to context analyzer
+        job_name = request.form.get('job_name', 'file_validation')
+        context_analyzer.add_error_to_history(job_name, error_entry)
         
         return jsonify({
             'status': 'fail', 
@@ -172,6 +181,10 @@ def validate_file():
             # Add to MCP server
             add_error_to_mcp(error_entry)
             
+            # Add to context analyzer
+            job_name = request.form.get('job_name', 'file_validation')
+            context_analyzer.add_error_to_history(job_name, error_entry)
+            
             return jsonify({
                 'status': 'fail',
                 'error': 'column_mismatch',
@@ -202,6 +215,10 @@ def validate_file():
         
         # Add to MCP server
         add_error_to_mcp(error_entry)
+        
+        # Add to context analyzer
+        job_name = request.form.get('job_name', 'file_validation')
+        context_analyzer.add_error_to_history(job_name, error_entry)
         
         return jsonify({
             'status': 'error',
@@ -253,6 +270,40 @@ def analyze_log():
     
     if mcp_analysis['status'] == 'success' and mcp_analysis.get('confidence') in ['high', 'medium']:
         # MCP provided high or medium confidence analysis
+        
+        # Add error to context analyzer history
+        error_entry = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'type': 'log_analysis',
+            'job': job_name,
+            'log': log_text,
+            'message': mcp_analysis.get('engineer_message', ''),
+            'solution_engineer': mcp_analysis.get('engineer_message', ''),
+            'solution_client': mcp_analysis.get('client_message', '')
+        }
+        context_analyzer.add_error_to_history(job_name, error_entry)
+        
+        # Get audience-specific contextualized messages
+        audience_type = data.get('audience_type', 'engineer')
+        try:
+            audience = AudienceType(audience_type)
+        except ValueError:
+            audience = AudienceType.ENGINEER
+            
+        if 'engineer_message' in mcp_analysis:
+            mcp_analysis['engineer_message'] = context_analyzer.contextualize_message(
+                mcp_analysis['engineer_message'], 
+                job_name, 
+                AudienceType.ENGINEER
+            )
+            
+        if 'client_message' in mcp_analysis:
+            mcp_analysis['client_message'] = context_analyzer.contextualize_message(
+                mcp_analysis['client_message'], 
+                job_name, 
+                AudienceType.CLIENT
+            )
+            
         return jsonify(mcp_analysis)
     
     # Fall back to legacy analysis for low confidence or error
@@ -312,6 +363,30 @@ def analyze_log():
         
         # Add to MCP server for future pattern matching
         add_error_to_mcp(error_entry)
+        
+        # Add to context analyzer
+        context_analyzer.add_error_to_history(job_name, error_entry)
+    
+    # Contextualize messages based on audience
+    audience_type = data.get('audience_type', 'engineer')
+    try:
+        audience = AudienceType(audience_type)
+    except ValueError:
+        audience = AudienceType.ENGINEER
+        
+    if analysis['engineer_message']:
+        analysis['engineer_message'] = context_analyzer.contextualize_message(
+            analysis['engineer_message'], 
+            job_name, 
+            AudienceType.ENGINEER
+        )
+        
+    if analysis['client_message']:
+        analysis['client_message'] = context_analyzer.contextualize_message(
+            analysis['client_message'], 
+            job_name, 
+            AudienceType.CLIENT
+        )
     
     return jsonify(analysis)
 
@@ -358,13 +433,28 @@ def zendesk_hook():
         
         # Formulate response based on analysis and rerun
         if rerun_result.get('status') == 'success':
+            # Generate contextualized messages for different audiences
             engineer_comment = f"✅ Re-execution of job **{job}** has been triggered.\n"
             if analysis_result and analysis_result.get('engineer_message'):
                 engineer_comment += f"\nAnalysis: {analysis_result.get('engineer_message')}"
+            else:
+                # Contextualize a generic message
+                engineer_comment = context_analyzer.contextualize_message(
+                    engineer_comment,
+                    job,
+                    AudienceType.ENGINEER
+                )
             
             client_comment = f"We've initiated the re-execution of the process. "
             if analysis_result and analysis_result.get('client_message'):
                 client_comment += analysis_result.get('client_message')
+            else:
+                # Contextualize a generic message
+                client_comment = context_analyzer.contextualize_message(
+                    client_comment,
+                    job,
+                    AudienceType.CLIENT
+                )
             
             # Add comments to ticket
             add_comment(tid, engineer_comment, public=False)
@@ -378,6 +468,12 @@ def zendesk_hook():
             })
         else:
             comment = f"❌ Unable to re-execute job **{job}**: {rerun_result.get('message', 'Unknown error')}"
+            # Contextualize the error message
+            comment = context_analyzer.contextualize_message(
+                comment,
+                job,
+                AudienceType.ENGINEER
+            )
             add_comment(tid, comment, public=False)
     else:
         comment = "❌ No job identified in the ticket description. Please specify by adding a line starting with 'Job:'"
@@ -414,6 +510,54 @@ def mcp_statistics():
     stats = get_mcp_stats()
     return jsonify({'status': 'success', 'data': stats})
 
+@app.route('/api/contextualized-message', methods=['POST'])
+def contextualized_message():
+    """Generate a contextualized message for a specific audience type"""
+    data = request.json
+    
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+        
+    message = data.get('message', '')
+    job_name = data.get('job', 'unknown')
+    audience_type_str = data.get('audience_type', 'engineer')
+    
+    if not message:
+        return jsonify({'status': 'error', 'message': 'No message provided'}), 400
+        
+    # Convert string audience type to enum
+    try:
+        audience_type = AudienceType(audience_type_str)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': f'Invalid audience type: {audience_type_str}'}), 400
+    
+    # Generate contextualized message
+    contextualized = context_analyzer.contextualize_message(
+        message, 
+        job_name, 
+        audience_type
+    )
+    
+    # If error data is provided, also generate a full context-aware response
+    if 'error_data' in data:
+        error_data = data['error_data']
+        full_response = context_analyzer.generate_context_aware_response(
+            job_name,
+            error_data,
+            audience_type
+        )
+        
+        return jsonify({
+            'status': 'success',
+            'contextualized_message': contextualized,
+            'full_response': full_response
+        })
+    
+    return jsonify({
+        'status': 'success',
+        'contextualized_message': contextualized
+    })
+
 if __name__ == '__main__':
     # Add some sample error patterns to start with
     ERROR_DB.append({
@@ -439,6 +583,8 @@ if __name__ == '__main__':
     # Add sample errors to MCP server as well
     for error in ERROR_DB:
         add_error_to_mcp(error)
+        # Also add to context analyzer
+        context_analyzer.add_error_to_history(error.get('job', 'unknown'), error)
     
-    print("DeepTrace server started with MCP integration")
+    print("DeepTrace server started with MCP integration and Contextual Analysis")
     app.run(debug=True, port=5000) 
